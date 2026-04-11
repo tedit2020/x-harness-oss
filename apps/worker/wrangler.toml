@@ -2,6 +2,7 @@ name = "x-harness-worker"
 main = "src/index.ts"
 compatibility_date = "2024-12-01"
 workers_dev = true
+# account_id = "YOUR_ACCOUNT_ID"  # Set your Cloudflare account ID
 
 # Set via: wrangler secret put API_KEY
 # Set via: wrangler secret put X_ACCESS_TOKEN
@@ -16,4 +17,10 @@ database_name = "x-harness"
 database_id = "YOUR_D1_DATABASE_ID"
 
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["55 2,8,11,20,22 * * *"]
+# 1つのcron式で5回/日（CF Free上限5トリガー対策）
+# UTC 20:55 = JST 05:55（06:00投稿前）
+# UTC 22:55 = JST 07:55（08:00投稿前）
+# UTC 02:55 = JST 11:55（12:00投稿前）
+# UTC 08:55 = JST 17:55（18:00投稿前）
+# UTC 11:55 = JST 20:55（21:00投稿前）
