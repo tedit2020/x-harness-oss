@@ -8,3 +8,11 @@ out/
 *.tsbuildinfo
 .vercel/
 packages/mcp/dist/
+.mcp.json
+.x-harness-setup.json
+.x-harness-config.json
+setup-secrets.sh
+.DS_Store
+.x-harness-credentials.local
+setup-auto.mjs
+apps/web/.env.production
