@@ -16,3 +16,4 @@ setup-secrets.sh
 .x-harness-credentials.local
 setup-auto.mjs
 apps/web/.env.production
+.claude/
