@@ -18,8 +18,11 @@ export async function processScheduledPosts(db: D1Database, xClient: XClient, xA
         console.error(`Rate limited while posting scheduled ${post.id}, will retry next run`);
         return;
       }
-      console.error(`Failed to post scheduled ${post.id}:`, err);
+      const errMsg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+      console.error(`Failed to post scheduled ${post.id}:`, errMsg);
       await updateScheduledPostStatus(db, post.id, 'failed');
+      // Save error detail to DB for diagnosis
+      await db.prepare("INSERT INTO api_usage_logs (id, x_account_id, endpoint, request_count, date, created_at) VALUES (?, ?, ?, ?, date('now'), datetime('now'))").bind(crypto.randomUUID(), post.x_account_id, `post_error:${errMsg.slice(0, 200)}`, 0, ).run().catch(() => {});
     }
   }
 }
