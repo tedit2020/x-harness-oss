@@ -1,0 +1,12 @@
+# .gitleaksignore - x-harness-oss gitleaks 無視リスト
+# 形式: <commit-hash>:<rule-id>:<file-path>:<start-line>
+# 使い方: gitleaks protect --staged --verbose で検出された内容を以下の形式で追記
+# 例: abc123:generic-api-key:apps/scheduler/src/index.ts:42
+#
+# ⚠️ 注意: false positive の場合のみ追記すること
+# 機密実値は .gitleaks.toml allowlist で対処すること
+#
+# 設置初期 1 週間の false positive 追跡ログ（§8.8 形式）:
+# | 日付 | ファイル | パターン | 対処方法 |
+# |------|---------|---------|---------|
+# (空 - 設置後に追記)

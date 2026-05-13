@@ -1,0 +1,31 @@
+# .gitleaks.toml - x-harness-oss 固有設定
+# Planner 設計: 2026-05-13 Tier B-3-3
+
+title = "x-harness-oss gitleaks configuration"
+
+[allowlist]
+description = "x-harness-oss allowlist"
+
+regexes = [
+  # プレースホルダ形式（共通雛形から継承）
+  '''YOUR_ACCOUNT_ID''',
+  '''YOUR_D1_DATABASE_ID''',
+  '''<CF_ACCOUNT_ID>''',
+  '''<MASKED_''',
+  # FP-19: TypeScript 型定義（変数名のみ、値なし）
+  ''':\s*string\s*[,;)]''',
+  # TypeScript interface/type の string フィールド定義
+  '''X_ACCESS_TOKEN.*:\s*string''',
+  '''X_REFRESH_TOKEN.*:\s*string''',
+]
+
+# FP-20 設計判断: x-harness-oss の D1 database_id は origin/main の git history に残存
+# （BFG 未実施、SECURITY_LEAK_GIT §1.2）
+# pre-push hook では --log-opts="--all" を使わない設計（§4.2 pre-push.sh 参照）
+# そのため git history の旧 commit は hook スキャン対象外（既知の許容リスク）
+# BFG 対応は B4-1 別計画書スコープ
+
+paths = [
+  '''\.dev\.vars\.example$''',
+  '''\.env\.example$''',
+]
