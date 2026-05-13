@@ -3,6 +3,14 @@
 
 title = "x-harness-oss gitleaks configuration"
 
+# Tier B-3-3 独自-1: [extend] useDefault = true を追加
+# 理由: gitleaks 8.30.1 はカスタム config を指定すると [[rules]] がない場合デフォルトルールが無効になる設計
+# [extend] useDefault = true でデフォルトルール（generic-api-key, github-pat 等）を継承しつつ
+# 下記 [allowlist] で false positive を抑制する。
+# 詳細: docs/IMPLEMENTATION_GITLEAKS_HOOKS_20260514.md §3 独自設計修正
+[extend]
+useDefault = true
+
 [allowlist]
 description = "x-harness-oss allowlist"
 
