@@ -9,4 +9,4 @@
 # 設置初期 1 週間の false positive 追跡ログ（§8.8 形式）:
 # | 日付 | ファイル | パターン | 対処方法 |
 # |------|---------|---------|---------|
-# (空 - 設置後に追記)
+# | 2026-05-17 | apps/bridge/test/index.test.ts | slack-bot-token + slack-webhook-url + github-pat | Array.join 動的構築で根本対策 (5/17 まっさん明示承認、追加 fingerprint 不要) |

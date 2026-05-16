@@ -1,0 +1,30 @@
+# =============================================================================
+# wrangler.toml.local.example (PUBLIC、サンプル値のみ)
+# =============================================================================
+# このファイルはサンプルです。実運用では以下の手順で wrangler.toml.local
+# (gitignored) を作成してください:
+#
+#   1. このファイルを cp して wrangler.toml.local を作る
+#        cp wrangler.toml.local.example wrangler.toml.local
+#   2. <CF_ACCOUNT_ID_REAL> を実値で置換 (まっさん Cloudflare dashboard から取得)
+#   3. <account-subdomain> を実値で置換 (例: tedit、wrangler whoami で確認可)
+#   4. assume-unchanged で git 追跡から外す:
+#        git update-index --assume-unchanged apps/bridge/wrangler.toml
+#   5. deploy 時は wrangler が wrangler.toml を読むので、
+#      実値を wrangler.toml に手動コピーするか、
+#      または wrangler.toml 自体を assume-unchanged にして実値編集
+#
+# 実値投入はまっさん作業 (Implementer / クロコ Bash 経由禁止)。
+# feedback_credential_file_access_principle.md 原則 9 厳守。
+# =============================================================================
+
+# 実値投入例 (サンプル、本物ではない):
+# account_id = "<CF_ACCOUNT_ID_REAL>"
+#
+# [vars]
+# WORKER_URL = "https://kuroko-sisters-bridge.<account-subdomain>.workers.dev"
+# GITHUB_OWNER = "<GITHUB_OWNER_REAL>"
+# GITHUB_REPO = "kuroko-org"
+# GITHUB_BRANCH = "main"
+# NTFY_BASE_URL = "https://ntfy.sh"
+# BOT_USER_ID = "<UXXXXXXXXX_REAL>"   # 5/21 夜 install 後

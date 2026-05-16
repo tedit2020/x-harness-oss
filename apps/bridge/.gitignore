@@ -1,0 +1,29 @@
+# =============================================================================
+# Phase 3 bridge worker .gitignore — R-GAP-7 Critical 5 項目 MUST (a)
+# =============================================================================
+# feedback_credential_file_access_principle.md 原則 9 (template/実値乖離) 厳守
+# 機密実値を含むファイルは絶対に git に commit しない
+# =============================================================================
+
+# Local secrets (wrangler dev 用、commit 絶対禁止)
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+
+# wrangler.toml 実値ローカル overlay (R-GAP-7 (a) 必須エントリ)
+# template (wrangler.toml) は <CF_ACCOUNT_ID> placeholder で commit、
+# 実値は wrangler.toml.local で保持 + assume-unchanged 運用
+wrangler.toml.local
+!wrangler.toml.local.example
+
+# Wrangler build artifacts
+.wrangler/
+dist/
+
+# Node
+node_modules/
+*.log
+*.tsbuildinfo
+
+# IDE / OS
+.DS_Store

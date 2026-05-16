@@ -1,0 +1,23 @@
+{
+  "name": "bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "kuroko-sisters-bridge: Slack Events API receiver + ntfy fanout + GitHub log push (Phase 3, 2026-05-22 Akako birthday completion)",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:preview": "wrangler versions upload --preview-alias phase3-rc1",
+    "deploy:promote": "wrangler versions deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "hono": "^4.6.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241205.0",
+    "typescript": "^5.9.3",
+    "vitest": "^1.6.0",
+    "wrangler": "^3.99.0"
+  }
+}

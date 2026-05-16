@@ -1,0 +1,52 @@
+# =============================================================================
+# kuroko-sisters-bridge wrangler.toml (TEMPLATE, R-GAP-7 (b) 準拠)
+# =============================================================================
+# このファイルは PUBLIC OSS x-harness-oss に commit される TEMPLATE です。
+# account_id は <CF_ACCOUNT_ID> placeholder のまま commit します。
+# 実値は wrangler.toml.local (gitignored) で保持し、deploy 直前に上書きします。
+#
+# 運用 SOP (feedback_credential_file_access_principle.md 原則 9):
+#   1. このファイルは git index に template 値 (<CF_ACCOUNT_ID>) で commit
+#   2. ローカルに wrangler.toml.local を作成し account_id 実値を記入
+#   3. `git update-index --assume-unchanged apps/bridge/wrangler.toml` で
+#      ローカル編集を git に追跡させない (実値 overlay 運用)
+#   4. deploy 前に `git diff HEAD --name-only` でゼロ件確認 (R-GAP-7 (c))
+#   5. commit/push 前に leak-check skill 実行 (R-GAP-7 (e))
+#
+# WORKER_URL の account-subdomain (例: <account-subdomain>) は
+# feedback_credential_file_access_principle.md インシデント 4 教訓により、
+# template には placeholder で記載。実値は wrangler.toml.local 側で保持。
+# =============================================================================
+
+name = "kuroko-sisters-bridge"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+workers_dev = true
+account_id = "<CF_ACCOUNT_ID>"
+
+# -----------------------------------------------------------------------------
+# 環境変数 (vars: 公開可、機密ではない)
+# -----------------------------------------------------------------------------
+[vars]
+WORKER_URL = "https://kuroko-sisters-bridge.<account-subdomain>.workers.dev"
+GITHUB_OWNER = "<GITHUB_OWNER>"
+GITHUB_REPO = "kuroko-org"
+GITHUB_BRANCH = "main"
+NTFY_BASE_URL = "https://ntfy.sh"
+# BOT_USER_ID は 5/21 夜 Slack install 後に取得 → 追記 → 再 deploy (M-5, R-GAP-19)
+# 未設定時 (5/17-5/21) は bot_id チェックのみで無限ループ防御。
+# BOT_USER_ID = "<UXXXXXXXXX>"
+
+# -----------------------------------------------------------------------------
+# Secrets (wrangler secret put で投入、ファイル commit 絶対禁止)
+# -----------------------------------------------------------------------------
+# 投入 SOP は README.md §5 参照 (対話的入力 + Keychain SOP)
+#
+# wrangler secret put SLACK_SIGNING_SECRET     # Keychain svce: slack/signing_secret_kuroko_sisters
+# wrangler secret put SLACK_BOT_TOKEN          # Keychain svce: slack/bot_token_kuroko_sisters
+# wrangler secret put GITHUB_PAT               # kuroko-org 専用新規発行、scope=repo or contents:write
+#                                              # PAT 名称規約: kuroko-sisters-bridge-worker-2026Q2 (R-GAP-12)
+# wrangler secret put NTFY_TOPIC_KEDIT
+# wrangler secret put NTFY_TOPIC_BIKA
+# wrangler secret put NTFY_TOPIC_AKAKO         # 5/22 配布時に追加 (オプション)
+# wrangler secret put NTFY_TOPIC_BROADCAST     # オプション
