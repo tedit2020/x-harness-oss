@@ -13,7 +13,7 @@
  *              NTFY_BASE_URL / BOT_USER_ID (5/21 夜以降設定)
  * secrets (機密): SLACK_SIGNING_SECRET / SLACK_BOT_TOKEN / GITHUB_PAT /
  *                 NTFY_TOPIC_KEDIT / NTFY_TOPIC_BIKA / NTFY_TOPIC_AKAKO? /
- *                 NTFY_TOPIC_BROADCAST?
+ *                 NTFY_TOPIC_BROADCAST? / NTFY_TOKEN?
  */
 export type Bindings = {
   // ─── vars (public) ───
@@ -35,6 +35,8 @@ export type Bindings = {
   NTFY_TOPIC_AKAKO?: string;
   /** オプション、未設定なら fanout skip */
   NTFY_TOPIC_BROADCAST?: string;
+  /** ntfy.sh Access Token (tk_...)。設定時 IP ベース制限 → アカウントベース制限に切替（案A）。未設定なら認証なし publish（後方互換）。 */
+  NTFY_TOKEN?: string;
 };
 
 /**

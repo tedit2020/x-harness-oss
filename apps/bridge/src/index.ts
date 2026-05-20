@@ -328,11 +328,23 @@ async function handleEvent(
 }
 
 // =============================================================================
+// ntfy 認証ヘッダ生成ヘルパー（案A: NTFY_TOKEN 対応）
+// =============================================================================
+// PLAN_BRIDGE_NTFY_AUTH_TOKEN_20260520 §6 推奨実装。
+// NTFY_TOKEN が設定されていれば Bearer ヘッダを返し、未設定なら空オブジェクト（後方互換）。
+// pushNtfy / pushNtfyDialog の両経路で同一ヘルパーを使うことでロジック重複ゼロを保証（§6.2）。
+// 値・prefix は console.log に出力しない（feedback_external_output_masking）。
+// =============================================================================
+function ntfyAuthHeaders(env: Bindings): Record<string, string> {
+  return env.NTFY_TOKEN ? { Authorization: `Bearer ${env.NTFY_TOKEN}` } : {};
+}
+
+// =============================================================================
 // ntfy.sh fanout (1 topic 1 fetch、5s timeout、失敗 silent)
 // =============================================================================
 // RESEARCH §3.2 流用、機密マスキング: topic は prefix 12 文字のみ log 出力
 // =============================================================================
-async function pushNtfy(
+export async function pushNtfy(
   env: Bindings,
   topic: string | undefined,
   ev: SlackEvent,
@@ -350,6 +362,7 @@ async function pushNtfy(
     const res = await fetch(`${env.NTFY_BASE_URL}/${topic}`, {
       method: 'POST',
       headers: {
+        ...ntfyAuthHeaders(env),
         Title: title,
         Priority: '3',
         Tags: 'kuroko,slack-relay',
@@ -719,6 +732,7 @@ export async function pushNtfyDialog(
     const res = await fetch(`${env.NTFY_BASE_URL}/${topic}`, {
       method: 'POST',
       headers: {
+        ...ntfyAuthHeaders(env),
         'Content-Type': 'application/json',
         'Title': 'dialog',
       },

@@ -21,6 +21,7 @@ import { describe, it, expect } from 'vitest';
 import {
   verifySlackSignature,
   containsDenyPattern,
+  pushNtfy,
   pushNtfyDialog,
   detectDialogMode,
 } from '../src/index.js';
@@ -308,5 +309,189 @@ describe('pushNtfyDialog (A⇔C contract JSON body)', () => {
     // thread_ts が undefined の場合は ev.ts を代入
     expect(parsed.thread_ts).toBe('1716000001.000000');
     expect(parsed.dialog_mode).toBe(true);
+  });
+});
+
+// =============================================================================
+// §5. ntfy 認証トークン対応テスト（PLAN_BRIDGE_NTFY_AUTH_TOKEN_20260520）
+// =============================================================================
+// §5.2 の表（Case 5-1〜5-4）を実装。
+// §4（pushNtfyDialog）と同じ globalThis.fetch mock パターンを横展開。
+// trivially pass 防止: headers['Authorization'] を完全文字列一致で assert。
+// 未設定ケースは Object.keys(headers) に 'Authorization' が含まれないことを assert（§5.3）。
+// SECURITY: fake token 値のみ使用（実 token は絶対に書かない）。
+// =============================================================================
+
+// §5 共通: fake 値定義（SECURITY: 実 token ではない test 用 fake）
+const FAKE_TOKEN = 'tk_test_fake_token_not_real_0000000000000';
+
+// §5 共通: pushNtfy 呼び出し用 fake SlackEvent / EventCallbackPayload
+const fakePushNtfyEnvWithToken = {
+  NTFY_BASE_URL: 'https://ntfy.sh',
+  NTFY_TOKEN: FAKE_TOKEN,
+  // pushNtfy 内で参照する Bindings 最小セット（型キャストで補完）
+} as Parameters<typeof pushNtfy>[0];
+
+const fakePushNtfyEnvWithoutToken = {
+  NTFY_BASE_URL: 'https://ntfy.sh',
+  // NTFY_TOKEN なし → 後方互換（Authorization ヘッダ付与しない）
+} as Parameters<typeof pushNtfy>[0];
+
+const fakeSlackEvent = {
+  type: 'message',
+  channel: 'C1234567890',
+  user: 'U1234567890',
+  text: 'テストメッセージ',
+  ts: '1716000000.000000',
+} as const;
+
+const fakeEventCallbackPayload = {
+  type: 'event_callback',
+  token: 'fake',
+  team_id: 'T1234567890',
+  api_app_id: 'A1234567890',
+  event_id: 'Ev1234567890',
+  event_time: 1716000000,
+  event: fakeSlackEvent,
+} as Parameters<typeof pushNtfy>[3];
+
+describe('ntfy 認証トークン対応（NTFY_TOKEN headers 検証）', () => {
+  // ─── Case 5-1: pushNtfy + NTFY_TOKEN 設定あり ───
+  it('Case 5-1: pushNtfy: NTFY_TOKEN 設定時 Authorization ヘッダが正しく付与される', async () => {
+    const capturedHeaders: Record<string, string>[] = [];
+    const capturedUrls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      capturedUrls.push(String(input));
+      if (init?.headers) capturedHeaders.push(init.headers as Record<string, string>);
+      return new Response(null, { status: 200 });
+    };
+
+    await pushNtfy(fakePushNtfyEnvWithToken, 'test-ntfy-topic', fakeSlackEvent, fakeEventCallbackPayload);
+    globalThis.fetch = originalFetch;
+
+    expect(capturedHeaders.length).toBe(1);
+    const h = capturedHeaders[0];
+
+    // Authorization: 完全文字列一致（trivially pass 防止）
+    expect(h['Authorization']).toBe(`Bearer ${FAKE_TOKEN}`);
+
+    // 既存ヘッダの保持確認（regression）
+    expect(typeof h['Title']).toBe('string');
+    expect(h['Priority']).toBe('3');
+    expect(h['Tags']).toBe('kuroko,slack-relay');
+    expect(typeof h['Click']).toBe('string');
+
+    // fetch の呼び出し URL も確認（mock が本物の経路を通っていることを保証）
+    expect(capturedUrls[0]).toBe('https://ntfy.sh/test-ntfy-topic');
+  });
+
+  // ─── Case 5-2: pushNtfy + NTFY_TOKEN 未設定 ───
+  it('Case 5-2: pushNtfy: NTFY_TOKEN 未設定時 Authorization ヘッダが付かない（後方互換）', async () => {
+    const capturedHeaders: Record<string, string>[] = [];
+    const capturedUrls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      capturedUrls.push(String(input));
+      if (init?.headers) capturedHeaders.push(init.headers as Record<string, string>);
+      return new Response(null, { status: 200 });
+    };
+
+    await pushNtfy(fakePushNtfyEnvWithoutToken, 'test-ntfy-topic', fakeSlackEvent, fakeEventCallbackPayload);
+    globalThis.fetch = originalFetch;
+
+    expect(capturedHeaders.length).toBe(1);
+    const h = capturedHeaders[0];
+
+    // Authorization キーが存在しないことを assert（Object.keys で厳密検証、§5.3）
+    expect(Object.keys(h)).not.toContain('Authorization');
+
+    // 既存ヘッダの保持確認（regression）
+    expect(typeof h['Title']).toBe('string');
+    expect(h['Priority']).toBe('3');
+    expect(h['Tags']).toBe('kuroko,slack-relay');
+    expect(typeof h['Click']).toBe('string');
+
+    expect(capturedUrls[0]).toBe('https://ntfy.sh/test-ntfy-topic');
+  });
+
+  // ─── Case 5-3: pushNtfyDialog + NTFY_TOKEN 設定あり ───
+  it('Case 5-3: pushNtfyDialog: NTFY_TOKEN 設定時 Authorization ヘッダが正しく付与される', async () => {
+    const capturedHeaders: Record<string, string>[] = [];
+    const capturedUrls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      capturedUrls.push(String(input));
+      if (init?.headers) capturedHeaders.push(init.headers as Record<string, string>);
+      return new Response(null, { status: 200 });
+    };
+
+    const fakeDialogEnvWithToken = {
+      NTFY_BASE_URL: 'https://ntfy.sh',
+      NTFY_TOKEN: FAKE_TOKEN,
+    } as Parameters<typeof pushNtfyDialog>[0];
+
+    const fakeDialogEv = {
+      type: 'message' as const,
+      text: 'ネタ: テスト',
+      ts: '1716000000.000000',
+      thread_ts: '1716000000.000000',
+      channel: 'C1234567890',
+      user: 'U1234567890',
+    };
+
+    await pushNtfyDialog(fakeDialogEnvWithToken, fakeDialogEv, 'test-dialog-topic');
+    globalThis.fetch = originalFetch;
+
+    expect(capturedHeaders.length).toBe(1);
+    const h = capturedHeaders[0];
+
+    // Authorization: 完全文字列一致（trivially pass 防止）
+    expect(h['Authorization']).toBe(`Bearer ${FAKE_TOKEN}`);
+
+    // 既存ヘッダの保持確認（regression）
+    expect(h['Content-Type']).toBe('application/json');
+    expect(h['Title']).toBe('dialog');
+
+    expect(capturedUrls[0]).toBe('https://ntfy.sh/test-dialog-topic');
+  });
+
+  // ─── Case 5-4: pushNtfyDialog + NTFY_TOKEN 未設定 ───
+  it('Case 5-4: pushNtfyDialog: NTFY_TOKEN 未設定時 Authorization ヘッダが付かない（後方互換）', async () => {
+    const capturedHeaders: Record<string, string>[] = [];
+    const capturedUrls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      capturedUrls.push(String(input));
+      if (init?.headers) capturedHeaders.push(init.headers as Record<string, string>);
+      return new Response(null, { status: 200 });
+    };
+
+    const fakeDialogEnvWithoutToken = {
+      NTFY_BASE_URL: 'https://ntfy.sh',
+    } as Parameters<typeof pushNtfyDialog>[0];
+
+    const fakeDialogEv = {
+      type: 'message' as const,
+      text: '投稿案を作って',
+      ts: '1716000001.000000',
+      channel: 'C0987654321',
+      user: 'U0987654321',
+    };
+
+    await pushNtfyDialog(fakeDialogEnvWithoutToken, fakeDialogEv, 'test-dialog-topic-2');
+    globalThis.fetch = originalFetch;
+
+    expect(capturedHeaders.length).toBe(1);
+    const h = capturedHeaders[0];
+
+    // Authorization キーが存在しないことを assert（Object.keys で厳密検証、§5.3）
+    expect(Object.keys(h)).not.toContain('Authorization');
+
+    // 既存ヘッダの保持確認（regression）
+    expect(h['Content-Type']).toBe('application/json');
+    expect(h['Title']).toBe('dialog');
+
+    expect(capturedUrls[0]).toBe('https://ntfy.sh/test-dialog-topic-2');
   });
 });
