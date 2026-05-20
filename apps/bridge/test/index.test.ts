@@ -18,7 +18,12 @@
 // =============================================================================
 
 import { describe, it, expect } from 'vitest';
-import { verifySlackSignature, containsDenyPattern, pushNtfyDialog } from '../src/index.js';
+import {
+  verifySlackSignature,
+  containsDenyPattern,
+  pushNtfyDialog,
+  detectDialogMode,
+} from '../src/index.js';
 import type { DialogEventPayload } from '../src/types.js';
 
 // =============================================================================
@@ -189,47 +194,43 @@ describe('containsDenyPattern (機密マスキング 2 重ガード)', () => {
 });
 
 // =============================================================================
-// §3. /slack/dialog keyword 検出 smoke テスト（Phase 3 v4 A-v3-1）
+// §3. detectDialogMode keyword 検出 smoke テスト（Phase 3 v4 A-v3-1 / High-1）
 // =============================================================================
 // PLAN v4 §2.2.2 / 完了条件 6: keyword smoke 3 件（"ネタ" / "投稿案" / "@シロコ"）PASS
 // feedback_system_forced_branching: 重要な分岐はシステム側で強制（固定リスト、LLM 判定禁止）
+//
+// Phase 3 v4 High-1: src/index.ts の export された実関数 detectDialogMode を
+// 直接 import してテストする（inline コピー DIALOG_KEYWORDS_TEST は廃止）。
+// テストと本番ロジックの乖離リスクを排除（Evaluator High-1 指摘対応）。
 // =============================================================================
-
-// detectDialogMode を直接テストするため、簡易実装を inline で再現
-// （Worker 内の private 関数をエクスポートせずにロジックを検証）
-const DIALOG_KEYWORDS_TEST = ['投稿案', 'ネタ', 'x-post', 'xpost', 'tweet', '@シロコ'];
-function detectDialogModeTest(text: string): boolean {
-  const lower = text.toLowerCase();
-  return DIALOG_KEYWORDS_TEST.some((kw) => lower.includes(kw.toLowerCase()));
-}
 
 describe('detectDialogMode (keyword 検出 smoke テスト)', () => {
   it('Case 1: "ネタ" を含むテキストは dialog_mode=true', () => {
-    expect(detectDialogModeTest('ネタ: OpenAI $50M 動向、投稿案出して')).toBe(true);
+    expect(detectDialogMode('ネタ: OpenAI $50M 動向、投稿案出して')).toBe(true);
   });
 
   it('Case 2: "投稿案" を含むテキストは dialog_mode=true', () => {
-    expect(detectDialogModeTest('投稿案を作ってほしい')).toBe(true);
+    expect(detectDialogMode('投稿案を作ってほしい')).toBe(true);
   });
 
   it('Case 3: "@シロコ" を含むテキストは dialog_mode=true', () => {
-    expect(detectDialogModeTest('@シロコ 最新のAI情報まとめて')).toBe(true);
+    expect(detectDialogMode('@シロコ 最新のAI情報まとめて')).toBe(true);
   });
 
   it('Case 4: "x-post" を含むテキストは dialog_mode=true', () => {
-    expect(detectDialogModeTest('x-post してほしい内容がある')).toBe(true);
+    expect(detectDialogMode('x-post してほしい内容がある')).toBe(true);
   });
 
   it('Case 5: "tweet" を含むテキストは dialog_mode=true', () => {
-    expect(detectDialogModeTest('tweet したいネタがある')).toBe(true);
+    expect(detectDialogMode('tweet したいネタがある')).toBe(true);
   });
 
   it('Case 6: keyword なしのテキストは dialog_mode=false', () => {
-    expect(detectDialogModeTest('今日のミーティング 14 時から始めます')).toBe(false);
+    expect(detectDialogMode('今日のミーティング 14 時から始めます')).toBe(false);
   });
 
   it('Case 7: 空文字列は dialog_mode=false', () => {
-    expect(detectDialogModeTest('')).toBe(false);
+    expect(detectDialogMode('')).toBe(false);
   });
 });
 

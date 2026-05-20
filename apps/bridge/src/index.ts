@@ -283,6 +283,22 @@ async function handleEvent(
     return;
   }
 
+  // Phase 3 v4 独自-A-1: PLAN §6.1「/slack/events は一切変更しない」制約を上書き。
+  // 理由 = PLAN §2.2.1 アーキテクチャ矛盾。Slack Events API は 1 アプリ 1 request_url
+  // のため、別エンドポイント /slack/dialog には message イベントが届かない
+  // （manifest.yaml event_subscriptions.request_url は /slack/events のみ）。
+  // → /slack/events の入口で dialog keyword 判定 → 経路分岐する案 B 方式に変更。
+  // まっさん承認 2026-05-20。Evaluator High-2。
+  // 詳細: docs/PLAN_PHASE3_V3_AKAKO_INFRA_BRIDGE_v4_20260520.md §0.4 / §2.2.1
+  // backward compatibility: 非 dialog メッセージは従来 pushNtfy 経路を完全保全。
+  if (detectDialogMode(ev.text || '')) {
+    // dialog keyword 該当 → dialog fanout 経路（pushNtfyDialog 経由、dialog_mode=true）
+    // DENY / bot_id / subtype チェックは上で既に通過済のため再実行しない。
+    await dispatchDialogFanout(ev, payload, env);
+    return;
+  }
+
+  // 非 dialog メッセージ: 従来 pushNtfy 経路（v2 設計のまま、regress なし）
   // ntfy fanout を先に走らせる (即時性、R-GAP-6)
   const ntfyJob = Promise.allSettled([
     pushNtfy(env, env.NTFY_TOPIC_KEDIT, ev, payload),
@@ -529,13 +545,95 @@ const DIALOG_KEYWORDS: string[] = [
   '@シロコ',
 ];
 
-function detectDialogMode(text: string): boolean {
+// Phase 3 v4 High-1: detectDialogMode を export 化。
+// 案 B で handleEvent（/slack/events 入口）から呼ぶため export が必然。
+// test/index.test.ts §3 keyword smoke も本実関数を直接 import してテストする
+// （inline コピー DIALOG_KEYWORDS_TEST は廃止、Evaluator High-1）。
+export function detectDialogMode(text: string): boolean {
   // Phase 3 v4 A-v3-1: keyword に1つでもマッチしたら dialog_mode=true
   // LLM 判定禁止（feedback_system_forced_branching 連動）
   const lower = text.toLowerCase();
   return DIALOG_KEYWORDS.some((kw) => lower.includes(kw.toLowerCase()));
 }
 
+// =============================================================================
+// dispatchDialogFanout: dialog fanout コア処理 (Phase 3 v4 A-v3-3)
+// =============================================================================
+// dialog keyword 該当メッセージを pushNtfyDialog() で JSON fanout する共通処理。
+// handleEvent（/slack/events 入口、案 B 経路）と handleDialogEvent
+// （/slack/dialog test 用エンドポイント）の両方から再利用する。
+// 呼び出し側で DENY / bot_id / subtype チェックを通過済の前提。
+// 詳細: docs/PLAN_PHASE3_V3_AKAKO_INFRA_BRIDGE_v4_20260520.md §2.2.2
+async function dispatchDialogFanout(
+  ev: SlackEvent,
+  payload: EventCallbackPayload,
+  env: Bindings,
+): Promise<void> {
+  // dialog 経路に必要なフィールドが揃わない場合は従来 pushNtfy 経路に fallback
+  if (!(ev.type === 'message' && ev.text && ev.channel && ev.user && ev.ts)) {
+    const fallbackNtfy = Promise.allSettled([
+      pushNtfy(env, env.NTFY_TOPIC_KEDIT, ev, payload),
+      pushNtfy(env, env.NTFY_TOPIC_BIKA, ev, payload),
+      env.NTFY_TOPIC_AKAKO
+        ? pushNtfy(env, env.NTFY_TOPIC_AKAKO, ev, payload)
+        : Promise.resolve(),
+      env.NTFY_TOPIC_BROADCAST
+        ? pushNtfy(env, env.NTFY_TOPIC_BROADCAST, ev, payload)
+        : Promise.resolve(),
+    ]);
+    const fallbackGithub = Promise.race<unknown>([
+      pushGitHubLogWithRetry(env, ev, payload, false),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('github push hard cap 25s')), 25_000),
+      ),
+    ]).catch((e) => {
+      console.warn('github push timeout or final fail (dialog fallback)', {
+        eventId: payload.event_id,
+        error: String(e).slice(0, 100),
+      });
+    });
+    await Promise.allSettled([fallbackNtfy, fallbackGithub]);
+    return;
+  }
+
+  // Phase 3 v4 A-v3-3: dialog_mode=true の場合は pushNtfyDialog() で JSON fanout
+  const dialogEv: DialogEventPayload = {
+    type: 'message',
+    text: ev.text,
+    ts: ev.ts,
+    thread_ts: ev.thread_ts,
+    channel: ev.channel,
+    user: ev.user,
+  };
+
+  const ntfyJobs: Promise<void>[] = [];
+  if (env.NTFY_TOPIC_KEDIT) ntfyJobs.push(pushNtfyDialog(env, dialogEv, env.NTFY_TOPIC_KEDIT));
+  if (env.NTFY_TOPIC_BIKA) ntfyJobs.push(pushNtfyDialog(env, dialogEv, env.NTFY_TOPIC_BIKA));
+  if (env.NTFY_TOPIC_AKAKO) ntfyJobs.push(pushNtfyDialog(env, dialogEv, env.NTFY_TOPIC_AKAKO));
+  if (env.NTFY_TOPIC_BROADCAST) ntfyJobs.push(pushNtfyDialog(env, dialogEv, env.NTFY_TOPIC_BROADCAST));
+
+  const githubJob = Promise.race<unknown>([
+    pushGitHubLogWithRetry(env, ev, payload, true),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('github push hard cap 25s')), 25_000),
+    ),
+  ]).catch((e) => {
+    console.warn('github push timeout or final fail (dialog)', {
+      eventId: payload.event_id,
+      error: String(e).slice(0, 100),
+    });
+  });
+
+  await Promise.allSettled([Promise.allSettled(ntfyJobs), githubJob]);
+}
+
+// =============================================================================
+// handleDialogEvent: /slack/dialog エンドポイント用（test POST 温存）
+// =============================================================================
+// 案 B 移行後、本番の message イベントは handleEvent（/slack/events 入口）
+// 経由で dispatchDialogFanout に流れる。本関数は /slack/dialog への直接 test
+// POST 用に温存（まっさん指示 2026-05-20）。
+// =============================================================================
 async function handleDialogEvent(
   payload: EventCallbackPayload,
   env: Bindings,
@@ -560,38 +658,9 @@ async function handleDialogEvent(
   }
 
   // keyword 検出（固定リスト、LLM 判定禁止）
-  const dialogMode = detectDialogMode(ev.text || '');
-
-  if (dialogMode && ev.type === 'message' && ev.text && ev.channel && ev.user && ev.ts) {
-    // Phase 3 v4 A-v3-3: dialog_mode=true の場合は pushNtfyDialog() で JSON fanout
-    const dialogEv: DialogEventPayload = {
-      type: 'message',
-      text: ev.text,
-      ts: ev.ts,
-      thread_ts: ev.thread_ts,
-      channel: ev.channel,
-      user: ev.user,
-    };
-
-    const ntfyJobs: Promise<void>[] = [];
-    if (env.NTFY_TOPIC_KEDIT) ntfyJobs.push(pushNtfyDialog(env, dialogEv, env.NTFY_TOPIC_KEDIT));
-    if (env.NTFY_TOPIC_BIKA) ntfyJobs.push(pushNtfyDialog(env, dialogEv, env.NTFY_TOPIC_BIKA));
-    if (env.NTFY_TOPIC_AKAKO) ntfyJobs.push(pushNtfyDialog(env, dialogEv, env.NTFY_TOPIC_AKAKO));
-    if (env.NTFY_TOPIC_BROADCAST) ntfyJobs.push(pushNtfyDialog(env, dialogEv, env.NTFY_TOPIC_BROADCAST));
-
-    const githubJob = Promise.race<unknown>([
-      pushGitHubLogWithRetry(env, ev, payload, true),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('github push hard cap 25s')), 25_000),
-      ),
-    ]).catch((e) => {
-      console.warn('github push timeout or final fail (dialog)', {
-        eventId: payload.event_id,
-        error: String(e).slice(0, 100),
-      });
-    });
-
-    await Promise.allSettled([Promise.allSettled(ntfyJobs), githubJob]);
+  if (detectDialogMode(ev.text || '')) {
+    // dialog keyword 該当 → dialog fanout（pushNtfyDialog 経由）
+    await dispatchDialogFanout(ev, payload, env);
   } else {
     // dialog_mode=false: 通常 ntfy fanout（non-dialog メッセージも受け付ける）
     const ntfyJob = Promise.allSettled([
