@@ -95,3 +95,21 @@ export type GitHubContentsGetResponse = {
   encoding: 'base64';
   type: 'file';
 };
+
+// Phase 3 v4 A-v3-4: DialogEventPayload 型追加（I-4 High 解消）
+// /slack/dialog endpoint 専用。pushNtfyDialog() の引数型として使用。
+// 既存 EventCallbackPayload / SlackEvent / Bindings は変更なし（別 type として定義）。
+// 詳細: docs/PLAN_PHASE3_V3_AKAKO_INFRA_BRIDGE_v4_20260520.md §2.2.2
+/**
+ * /slack/dialog endpoint 専用の Slack event payload 型。
+ * Worker が受信する event_callback の event フィールドを絞り込んだ型。
+ * pushNtfyDialog() の引数に使用し、type-safe な JSON fanout を保証する。
+ */
+export type DialogEventPayload = {
+  type: 'message';
+  text: string;
+  ts: string;
+  thread_ts?: string;
+  channel: string;
+  user: string;
+};

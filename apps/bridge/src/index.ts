@@ -32,6 +32,7 @@ import type {
   SlackEventPayload,
   EventCallbackPayload,
   GitHubContentsGetResponse,
+  DialogEventPayload,
 } from './types.js';
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -112,6 +113,78 @@ app.post('/slack/events', async (c) => {
   // Step 8: event_callback の副作用は waitUntil で非同期、Worker は即 200 OK
   if (payload.type === 'event_callback') {
     c.executionCtx.waitUntil(handleEvent(payload, c.env));
+  }
+  return c.json({ ok: true });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// /slack/dialog: Slack dialog endpoint (Phase 3 v4 A-v3-1)
+// X投稿対話フロー専用。keyword 検出 → dialog_mode=true → pushNtfyDialog() fanout。
+// PLAN v4 §2.2.1-2.2.2 / feedback_system_forced_branching 連動
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 3 v4 A-v3-1: /slack/dialog endpoint 追加（v3 継承）
+// 既存 /slack/events と /health は一切変更しない（v3 確定設計保全）。
+// keyword 検出は固定リスト（LLM 判定禁止、feedback_system_forced_branching）。
+// HMAC 検証・timestamp 検証は /slack/events と同一実装を踏襲。
+// 詳細: docs/PLAN_PHASE3_V3_AKAKO_INFRA_BRIDGE_v4_20260520.md §2.2.2
+app.post('/slack/dialog', async (c) => {
+  // Step 1: raw body 取得 (HMAC 検証は raw bytes 必須、json() 後は再構築不可)
+  const rawBody = await c.req.text();
+
+  // Step 2: signature headers 取得
+  const sigHeader = c.req.header('x-slack-signature');
+  const tsHeader = c.req.header('x-slack-request-timestamp');
+  if (!sigHeader || !tsHeader) {
+    return c.json({ error: 'missing signature headers' }, 401);
+  }
+
+  // Step 3: timestamp 5 分以内検証 (replay attack 防止、/slack/events と同一実装)
+  const nowSec = Math.floor(Date.now() / 1000);
+  const reqTs = parseInt(tsHeader, 10);
+  if (!Number.isFinite(reqTs) || Math.abs(nowSec - reqTs) > 300) {
+    return c.json({ error: 'timestamp out of tolerance' }, 401);
+  }
+
+  // Step 4: HMAC SHA-256 検証 (既存 verifySlackSignature を流用、§F.1)
+  const verified = await verifySlackSignature(
+    rawBody,
+    tsHeader,
+    sigHeader,
+    c.env.SLACK_SIGNING_SECRET,
+  );
+  if (!verified) {
+    console.warn('slack dialog signature verify FAILED', {
+      sigPrefix: sigHeader.slice(0, 10),
+      tsHeader,
+    });
+    return c.json({ error: 'unauthorized' }, 401);
+  }
+
+  // Step 5: JSON parse (検証後)
+  let payload: SlackEventPayload;
+  try {
+    payload = JSON.parse(rawBody) as SlackEventPayload;
+  } catch {
+    return c.json({ error: 'invalid json' }, 400);
+  }
+
+  // Step 6: url_verification challenge 即返却 (初回 Request URL 登録時)
+  if (payload.type === 'url_verification') {
+    return c.json({ challenge: payload.challenge });
+  }
+
+  // Step 7: retry 重複処理回避
+  if (c.req.header('x-slack-retry-num')) {
+    console.log('slack dialog retry detected, ignoring', {
+      eventId: (payload as EventCallbackPayload).event_id,
+      retryNum: c.req.header('x-slack-retry-num'),
+    });
+    return c.json({ ok: true, ignored: 'retry' });
+  }
+
+  // Step 8: event_callback の副作用は waitUntil で非同期、即 200 OK 返却
+  if (payload.type === 'event_callback') {
+    c.executionCtx.waitUntil(handleDialogEvent(payload, c.env));
   }
   return c.json({ ok: true });
 });
@@ -301,13 +374,14 @@ export async function pushGitHubLogWithRetry(
   env: Bindings,
   ev: SlackEvent,
   payload: EventCallbackPayload,
+  dialogMode = false,
 ): Promise<void> {
   const delays = [500, 1000];
   let lastError: unknown = null;
 
   for (let attempt = 0; attempt <= delays.length; attempt++) {
     try {
-      const result = await pushGitHubLog(env, ev, payload);
+      const result = await pushGitHubLog(env, ev, payload, dialogMode);
       if (result === 'ok') return;
       if (result === 'sha-conflict' && attempt < delays.length) {
         // SHA mismatch (他 commit 競合) → 最新 SHA 再取得 → 再 PUT
@@ -339,10 +413,15 @@ export async function pushGitHubLogWithRetry(
   });
 }
 
+// Phase 3 v4 A-v3-2: pushGitHubLog() の JSONL 行に dialog_mode: boolean + thread_ts: string|null を追加
+// 既存フィールド（ts/event_id/team_id/channel/user/text_len/thread_ts/channel_type）は変更なし。
+// dialog_mode は新規追加フィールド（falsy なら false）。
+// 詳細: docs/PLAN_PHASE3_V3_AKAKO_INFRA_BRIDGE_v4_20260520.md §2.2.2 スコープ A-v3-2
 async function pushGitHubLog(
   env: Bindings,
   ev: SlackEvent,
   payload: EventCallbackPayload,
+  dialogMode = false,
 ): Promise<'ok' | 'sha-conflict' | 'rate-limited' | 'error'> {
   const tsIso = new Date(payload.event_time * 1000).toISOString();
   const day = tsIso.slice(0, 10); // YYYY-MM-DD
@@ -357,6 +436,7 @@ async function pushGitHubLog(
       text_len: (ev.text || '').length,
       thread_ts: ev.thread_ts || null,
       channel_type: ev.channel_type,
+      dialog_mode: dialogMode,
     }) + '\n';
 
   const ghHeaders: Record<string, string> = {
@@ -428,6 +508,166 @@ function logRateLimit(res: Response, op: 'get' | 'put'): void {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+// =============================================================================
+// /slack/dialog: dialog event 処理 (Phase 3 v4 A-v3-1 / A-v3-3)
+// =============================================================================
+// keyword 検出 → dialog_mode=true → pushNtfyDialog() fanout。
+// DENY_PATTERNS 適用は /slack/events と同様。
+// 無限ループ防止 (bot_id / BOT_USER_ID チェック) も同様。
+// =============================================================================
+// Phase 3 v4 A-v3-1: dialog keyword 検出用固定リスト（LLM 判定禁止）
+// feedback_system_forced_branching: 重要な分岐はシステム側で強制。
+// 詳細: docs/PLAN_PHASE3_V3_AKAKO_INFRA_BRIDGE_v4_20260520.md §2.2.2
+const DIALOG_KEYWORDS: string[] = [
+  '投稿案',
+  'ネタ',
+  'x-post',
+  'xpost',
+  'tweet',
+  '@シロコ',
+];
+
+function detectDialogMode(text: string): boolean {
+  // Phase 3 v4 A-v3-1: keyword に1つでもマッチしたら dialog_mode=true
+  // LLM 判定禁止（feedback_system_forced_branching 連動）
+  const lower = text.toLowerCase();
+  return DIALOG_KEYWORDS.some((kw) => lower.includes(kw.toLowerCase()));
+}
+
+async function handleDialogEvent(
+  payload: EventCallbackPayload,
+  env: Bindings,
+): Promise<void> {
+  const ev = payload.event;
+  if (!ev || ev.type !== 'message') return;
+
+  // 無限ループ防止（/slack/events と同一実装）
+  if (ev.bot_id) return;
+  if (env.BOT_USER_ID && ev.user === env.BOT_USER_ID) return;
+
+  // edit / delete はスキップ
+  if (ev.subtype === 'message_changed' || ev.subtype === 'message_deleted') return;
+
+  // DENY_PATTERNS 適用（/slack/dialog でも必ず呼び出す、A-v3-1 要件）
+  if (containsDenyPattern(ev.text || '')) {
+    console.warn('dialog event masked by DENY pattern, dropped', {
+      eventId: payload.event_id,
+      channel: ev.channel,
+    });
+    return;
+  }
+
+  // keyword 検出（固定リスト、LLM 判定禁止）
+  const dialogMode = detectDialogMode(ev.text || '');
+
+  if (dialogMode && ev.type === 'message' && ev.text && ev.channel && ev.user && ev.ts) {
+    // Phase 3 v4 A-v3-3: dialog_mode=true の場合は pushNtfyDialog() で JSON fanout
+    const dialogEv: DialogEventPayload = {
+      type: 'message',
+      text: ev.text,
+      ts: ev.ts,
+      thread_ts: ev.thread_ts,
+      channel: ev.channel,
+      user: ev.user,
+    };
+
+    const ntfyJobs: Promise<void>[] = [];
+    if (env.NTFY_TOPIC_KEDIT) ntfyJobs.push(pushNtfyDialog(env, dialogEv, env.NTFY_TOPIC_KEDIT));
+    if (env.NTFY_TOPIC_BIKA) ntfyJobs.push(pushNtfyDialog(env, dialogEv, env.NTFY_TOPIC_BIKA));
+    if (env.NTFY_TOPIC_AKAKO) ntfyJobs.push(pushNtfyDialog(env, dialogEv, env.NTFY_TOPIC_AKAKO));
+    if (env.NTFY_TOPIC_BROADCAST) ntfyJobs.push(pushNtfyDialog(env, dialogEv, env.NTFY_TOPIC_BROADCAST));
+
+    const githubJob = Promise.race<unknown>([
+      pushGitHubLogWithRetry(env, ev, payload, true),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('github push hard cap 25s')), 25_000),
+      ),
+    ]).catch((e) => {
+      console.warn('github push timeout or final fail (dialog)', {
+        eventId: payload.event_id,
+        error: String(e).slice(0, 100),
+      });
+    });
+
+    await Promise.allSettled([Promise.allSettled(ntfyJobs), githubJob]);
+  } else {
+    // dialog_mode=false: 通常 ntfy fanout（non-dialog メッセージも受け付ける）
+    const ntfyJob = Promise.allSettled([
+      pushNtfy(env, env.NTFY_TOPIC_KEDIT, ev, payload),
+      pushNtfy(env, env.NTFY_TOPIC_BIKA, ev, payload),
+      env.NTFY_TOPIC_AKAKO
+        ? pushNtfy(env, env.NTFY_TOPIC_AKAKO, ev, payload)
+        : Promise.resolve(),
+      env.NTFY_TOPIC_BROADCAST
+        ? pushNtfy(env, env.NTFY_TOPIC_BROADCAST, ev, payload)
+        : Promise.resolve(),
+    ]);
+
+    const githubJob = Promise.race<unknown>([
+      pushGitHubLogWithRetry(env, ev, payload, false),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('github push hard cap 25s')), 25_000),
+      ),
+    ]).catch((e) => {
+      console.warn('github push timeout or final fail (dialog non-dialog)', {
+        eventId: payload.event_id,
+        error: String(e).slice(0, 100),
+      });
+    });
+
+    await Promise.allSettled([ntfyJob, githubJob]);
+  }
+}
+
+// =============================================================================
+// pushNtfyDialog: dialog 専用 ntfy push (Phase 3 v4 A-v3-3)
+// =============================================================================
+// Phase 3 v4 A-v3-3: dialog 専用 ntfy push（I-1 Critical 解消）
+// v2 pushNtfy() は変更なし、backward compatible
+// A⇔C インターフェース contract: JSON body の 5 フィールド（text/dialog_mode/
+//   thread_ts/channel/user）は Implementer C receive-from-slack.sh と完全一致必須。
+// 詳細: docs/PLAN_PHASE3_V3_AKAKO_INFRA_BRIDGE_v4_20260520.md §2.2.2
+export async function pushNtfyDialog(
+  env: Bindings,
+  ev: DialogEventPayload,
+  topic: string,
+): Promise<void> {
+  if (!topic) return;
+
+  // A⇔C contract JSON schema（Implementer C jq parse と完全一致）:
+  //   text: string, dialog_mode: true, thread_ts: string, channel: string, user: string
+  const body = JSON.stringify({
+    text: ev.text,
+    dialog_mode: true,
+    thread_ts: ev.thread_ts || ev.ts,
+    channel: ev.channel,
+    user: ev.user,
+  });
+
+  try {
+    const res = await fetch(`${env.NTFY_BASE_URL}/${topic}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Title': 'dialog',
+      },
+      body,
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) {
+      console.warn('ntfy dialog push non-2xx', {
+        topicPrefix: topic.slice(0, 12),
+        status: res.status,
+      });
+    }
+  } catch (e) {
+    console.warn('ntfy dialog push error', {
+      topicPrefix: topic.slice(0, 12),
+      error: String(e).slice(0, 100),
+    });
+  }
 }
 
 // =============================================================================
