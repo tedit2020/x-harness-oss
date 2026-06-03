@@ -17,10 +17,9 @@ database_name = "x-harness"
 database_id = "YOUR_D1_DATABASE_ID"
 
 [triggers]
-crons = ["55 2,8,11,20,22 * * *"]
-# 1つのcron式で5回/日（CF Free上限5トリガー対策）
-# UTC 20:55 = JST 05:55（06:00投稿前）
-# UTC 22:55 = JST 07:55（08:00投稿前）
-# UTC 02:55 = JST 11:55（12:00投稿前）
-# UTC 08:55 = JST 17:55（18:00投稿前）
-# UTC 11:55 = JST 20:55（21:00投稿前）
+crons = ["*/10 * * * *"]
+# 10 分毎実行（指定時刻 ±10 分以内に発火、ピッタリ運用可能）
+# 旧 cron "55 2,8,11,20,22 * * *" (1 日 5 回) は配信時刻ラグ "+1h 遅延 / -5h 前倒し" 観測で構造的解決
+# 副作用: engagement gates + follower snapshot も 10 分毎 = 1 日 144 回（旧 5 回の 28.8 倍）
+# Workers Free 100K req/day + D1 100K writes/day 試算 ~3,500 ops/day = 許容範囲
+# 配信負荷が問題になる場合は cron 分離 (scheduled posts のみ 10 分毎、他処理は別 cron) に切替可
