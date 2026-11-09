@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { Hono } from 'hono';
 import { posts } from '../posts.js';
 import { parseScheduledListQuery } from '../scheduled-query.js';
+import { createRequire } from 'node:module';
+import { getScheduledPosts } from '@x-harness/db';
 
 /**
  * GET /api/posts/scheduled — read-only filter (kawaraban plan v1.2 §4.4).
@@ -84,7 +86,7 @@ describe('GET /api/posts/scheduled', () => {
     const since = '2026-11-01T00:00:00+09:00';
     const res = await app.request(`/api/posts/scheduled?status=failed&since=${encodeURIComponent(since)}&limit=7`, {}, env);
     expect(res.status).toBe(200);
-    expect(calls[0].sql).toContain('scheduled_at >= ?');
+    expect(calls[0].sql).toContain('datetime(scheduled_at) >= datetime(?)');
     expect(calls[0].sql).toContain('LIMIT ?');
     expect(calls[0].sql).not.toContain('failed');
     expect(calls[0].binds).toEqual(['failed', since, 7]);
@@ -116,5 +118,35 @@ describe('GET /api/posts/scheduled', () => {
       id: 'p1', xAccountId: 'a', text: 'hi', mediaIds: null, scheduledAt: '2026-11-09T10:00:00+09:00',
       status: 'posted', postedTweetId: '1', createdAt: 'c', updatedAt: 'u',
     });
+  });
+});
+
+// Production holds mixed shapes: most rows are "+09:00", 12 old posted rows are UTC "Z" / ".000Z"
+// (read 2026-11-09). A plain string compare would misplace the Z rows by 9 hours.
+describe('since compares real instants, not strings (real SQLite)', () => {
+  const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as {
+    DatabaseSync: new (f: string) => { exec(s: string): void; prepare(s: string): { all(...p: unknown[]): unknown[] } };
+  };
+  function d1() {
+    const db = new DatabaseSync(':memory:');
+    db.exec(`CREATE TABLE scheduled_posts (id TEXT, x_account_id TEXT, text TEXT, media_ids TEXT, scheduled_at TEXT, status TEXT, posted_tweet_id TEXT, created_at TEXT, updated_at TEXT)`);
+    const rows: [string, string][] = [
+      ['z-in', '2026-07-01T03:00:00Z'], // 12:00 JST -> after since
+      ['ms-z-out', '2026-07-01T00:59:00.000Z'], // 09:59 JST -> before since
+      ['jst-in', '2026-07-01T10:00:00+09:00'], // exactly since -> included
+      ['jst-out', '2026-07-01T09:59:59+09:00'],
+    ];
+    for (const [id, at] of rows) db.exec(`INSERT INTO scheduled_posts VALUES ('${id}','a','t',NULL,'${at}','posted',NULL,'c','u')`);
+    return {
+      prepare(sql: string) {
+        let b: unknown[] = [];
+        const st = { bind(...x: unknown[]) { b = x; return st; }, async all() { return { results: db.prepare(sql).all(...b) }; } };
+        return st;
+      },
+    } as unknown as D1Database;
+  }
+  it('Z and .000Z rows are placed by their real time against a +09:00 since', async () => {
+    const got = await getScheduledPosts(d1(), { status: 'posted', since: '2026-07-01T10:00:00+09:00', limit: 100 });
+    expect(got.map((r) => r.id).sort()).toEqual(['jst-in', 'z-in']);
   });
 });
