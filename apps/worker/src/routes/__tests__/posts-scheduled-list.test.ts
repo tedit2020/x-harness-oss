@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { Hono } from 'hono';
 import { posts } from '../posts.js';
 import { parseScheduledListQuery } from '../scheduled-query.js';
-import { createRequire } from 'node:module';
 import { getScheduledPosts } from '@x-harness/db';
 
 /**
@@ -124,10 +123,12 @@ describe('GET /api/posts/scheduled', () => {
 // Production holds mixed shapes: most rows are "+09:00", 12 old posted rows are UTC "Z" / ".000Z"
 // (read 2026-11-09). A plain string compare would misplace the Z rows by 9 hours.
 describe('since compares real instants, not strings (real SQLite)', () => {
-  const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as {
-    DatabaseSync: new (f: string) => { exec(s: string): void; prepare(s: string): { all(...p: unknown[]): unknown[] } };
-  };
-  function d1() {
+  type Sqlite = { exec(s: string): void; prepare(s: string): { all(...p: unknown[]): unknown[] } };
+  // node:sqlite through a computed specifier: the worker tsconfig has no Node types.
+  const loadSqlite = async () =>
+    ((await import(/* @vite-ignore */ ['node', 'sqlite'].join(':'))) as { DatabaseSync: new (f: string) => Sqlite }).DatabaseSync;
+  async function d1() {
+    const DatabaseSync = await loadSqlite();
     const db = new DatabaseSync(':memory:');
     db.exec(`CREATE TABLE scheduled_posts (id TEXT, x_account_id TEXT, text TEXT, media_ids TEXT, scheduled_at TEXT, status TEXT, posted_tweet_id TEXT, created_at TEXT, updated_at TEXT)`);
     const rows: [string, string][] = [
@@ -146,7 +147,7 @@ describe('since compares real instants, not strings (real SQLite)', () => {
     } as unknown as D1Database;
   }
   it('Z and .000Z rows are placed by their real time against a +09:00 since', async () => {
-    const got = await getScheduledPosts(d1(), { status: 'posted', since: '2026-07-01T10:00:00+09:00', limit: 100 });
+    const got = await getScheduledPosts(await d1(), { status: 'posted', since: '2026-07-01T10:00:00+09:00', limit: 100 });
     expect(got.map((r) => r.id).sort()).toEqual(['jst-in', 'z-in']);
   });
 });
