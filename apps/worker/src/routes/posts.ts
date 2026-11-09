@@ -3,6 +3,7 @@ import { XClient } from '@x-harness/x-sdk';
 import { createScheduledPost, getScheduledPosts, deleteScheduledPost, getXAccountById, getXAccounts, incrementApiUsage, saveQuoteTweets, getQuoteTweetsByAccount, getQuoteTweetsBySource, getLatestDiscoveredAt, recordAction, getActions } from '@x-harness/db';
 import type { SaveQuoteTweetInput } from '@x-harness/db';
 import type { Env } from '../index.js';
+import { parseScheduledListQuery } from './scheduled-query.js';
 
 const posts = new Hono<Env>();
 
@@ -63,9 +64,22 @@ posts.post('/api/posts/schedule', async (c) => {
   }, 201);
 });
 
+// Read-only. ?status=scheduled|posted|failed&since=<JST>&limit=<1..200> (kawaraban).
+// No params = the old behaviour (scheduled only, no limit).
 posts.get('/api/posts/scheduled', async (c) => {
   const xAccountId = c.req.query('xAccountId');
-  const items = await getScheduledPosts(c.env.DB, { status: 'scheduled', xAccountId: xAccountId ?? undefined });
+  const parsed = parseScheduledListQuery({
+    status: c.req.query('status'),
+    since: c.req.query('since'),
+    limit: c.req.query('limit'),
+  });
+  if ('error' in parsed) return c.json({ success: false, error: parsed.error }, 400);
+  const items = await getScheduledPosts(c.env.DB, {
+    status: parsed.status,
+    xAccountId: xAccountId ?? undefined,
+    since: parsed.since,
+    limit: parsed.limit,
+  });
   return c.json({
     success: true,
     data: items.map((p) => ({
@@ -77,6 +91,7 @@ posts.get('/api/posts/scheduled', async (c) => {
       status: p.status,
       postedTweetId: p.posted_tweet_id,
       createdAt: p.created_at,
+      updatedAt: p.updated_at,
     })),
   });
 });

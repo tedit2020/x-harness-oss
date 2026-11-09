@@ -22,13 +22,19 @@ export async function createScheduledPost(db: D1Database, xAccountId: string, te
   return result!;
 }
 
-export async function getScheduledPosts(db: D1Database, opts: { status?: string; xAccountId?: string } = {}): Promise<DbScheduledPost[]> {
+export async function getScheduledPosts(db: D1Database, opts: { status?: string; xAccountId?: string; since?: string; limit?: number } = {}): Promise<DbScheduledPost[]> {
   const conditions: string[] = [];
   const binds: unknown[] = [];
   if (opts.status) { conditions.push('status = ?'); binds.push(opts.status); }
   if (opts.xAccountId) { conditions.push('x_account_id = ?'); binds.push(opts.xAccountId); }
+  // since / limit are read-only filters (kawaraban). Omitted = the old query, unchanged.
+  // scheduled_at is stored as the caller sent it: mostly "+09:00", but some old rows are UTC "Z".
+  // datetime() turns both into the same UTC instant, so the compare is by time, not by string.
+  if (opts.since) { conditions.push('datetime(scheduled_at) >= datetime(?)'); binds.push(opts.since); }
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-  const result = await db.prepare(`SELECT * FROM scheduled_posts ${where} ORDER BY scheduled_at ASC`).bind(...binds).all<DbScheduledPost>();
+  let sql = `SELECT * FROM scheduled_posts ${where} ORDER BY scheduled_at ASC`;
+  if (opts.limit !== undefined) { sql += ' LIMIT ?'; binds.push(opts.limit); }
+  const result = await db.prepare(sql).bind(...binds).all<DbScheduledPost>();
   return result.results;
 }
 
